@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL + pgvector ──────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: stock-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: stock_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI Application ────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stock-agent-app
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  # ── Daily Cron Worker ──────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stock-agent-worker
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
