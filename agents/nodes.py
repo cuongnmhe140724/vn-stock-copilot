@@ -24,6 +24,72 @@ from prompts.system_prompts import ANALYSIS_SYSTEM_PROMPT, ANALYST_PROMPT
 logger = logging.getLogger(__name__)
 
 
+def _safe_json_dumps(obj: Any) -> str:
+    """JSON serialize with full safety for pandas/numpy types."""
+    return json.dumps(_sanitize(obj), default=str, ensure_ascii=False, indent=2)
+
+
+def _sanitize(obj: Any) -> Any:
+    """Recursively make any object JSON-serializable.
+
+    Handles: tuple dict keys, numpy scalars, pandas Timestamps,
+    NaN/Inf, bytes, sets, and any other non-JSON-native type.
+    """
+    import numpy as np
+    import pandas as pd
+
+    # Dict – convert keys to str, recurse values
+    if isinstance(obj, dict):
+        return {str(k): _sanitize(v) for k, v in obj.items()}
+
+    # List / tuple / set
+    if isinstance(obj, (list, tuple, set)):
+        return [_sanitize(item) for item in obj]
+
+    # Pandas Timestamp
+    if isinstance(obj, (pd.Timestamp,)):
+        return obj.isoformat()
+
+    # Numpy scalar types
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        v = float(obj)
+        if np.isnan(v) or np.isinf(v):
+            return None
+        return v
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return _sanitize(obj.tolist())
+
+    # Python float NaN/Inf
+    if isinstance(obj, float):
+        if obj != obj or obj == float("inf") or obj == float("-inf"):
+            return None
+
+    # Pydantic models
+    if hasattr(obj, "model_dump"):
+        return _sanitize(obj.model_dump())
+
+    # bytes
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+
+    return obj
+
+
+# Keep backward compat alias
+_sanitize_keys = _sanitize
+
+
+def _g(obj: Any, key: str, default: Any = None) -> Any:
+    """Get a value from a dict or object attribute — works with both."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _get_llm() -> ChatAnthropic:
     """Return a configured Claude LLM instance."""
     settings = get_settings()
@@ -76,13 +142,13 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
     except Exception:
         logger.warning("Could not fetch previous thesis from DB")
 
-    return {
+    return _sanitize_keys({
         "current_price": current_price,
         "raw_financials": raw_financials,
         "raw_ohlc": raw_ohlc,
         "raw_news": raw_news,
         "previous_thesis": previous_thesis,
-    }
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,8 +167,8 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
     # Build data context for the LLM
     data_context = (
         f"## Dữ liệu tài chính cho {ticker}\n\n"
-        f"### Financial Ratios\n```json\n{json.dumps(state['raw_financials'], default=str, ensure_ascii=False, indent=2)}\n```\n\n"
-        f"### Price & Technical Data\n```json\n{json.dumps(state['raw_ohlc'], default=str, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"### Financial Ratios\n```json\n{_safe_json_dumps(state['raw_financials'])}\n```\n\n"
+        f"### Price & Technical Data\n```json\n{_safe_json_dumps(state['raw_ohlc'])}\n```\n\n"
         f"### Tin tức gần đây\n" + "\n".join(f"- {n}" for n in state.get("raw_news", []))
     )
 
@@ -144,10 +210,10 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
             resistance_zone=ta_data.get("resistance_zone", "N/A"),
         )
 
-        return {
+        return _sanitize({
             "financial_analysis": financial_analysis,
             "technical_signals": technical_signals,
-        }
+        })
 
     except Exception as exc:
         logger.exception("Analyst node failed for %s: %s", ticker, exc)
@@ -177,17 +243,17 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
     fa_summary = ""
     if fa:
         fa_summary = (
-            f"Revenue Growth: {fa.revenue_growth}% | Profit Growth: {fa.profit_growth}%\n"
-            f"ROE: {fa.roe}% | P/E: {fa.pe_ratio} | D/E: {fa.debt_to_equity}\n"
-            f"Sức khỏe tài chính: {'✅ Tốt' if fa.is_healthy else '⚠️ Cần lưu ý'}"
+            f"Revenue Growth: {_g(fa, 'revenue_growth')}% | Profit Growth: {_g(fa, 'profit_growth')}%\n"
+            f"ROE: {_g(fa, 'roe')}% | P/E: {_g(fa, 'pe_ratio')} | D/E: {_g(fa, 'debt_to_equity')}\n"
+            f"Sức khỏe tài chính: {'✅ Tốt' if _g(fa, 'is_healthy') else '⚠️ Cần lưu ý'}"
         )
 
     ta_summary = ""
     if ta:
         ta_summary = (
-            f"Xu hướng: {ta.trend} | RSI: {ta.rsi}\n"
-            f"MA: {ta.ma_alignment}\n"
-            f"Hỗ trợ: {ta.support_zone} | Kháng cự: {ta.resistance_zone}"
+            f"Xu hướng: {_g(ta, 'trend')} | RSI: {_g(ta, 'rsi')}\n"
+            f"MA: {_g(ta, 'ma_alignment')}\n"
+            f"Hỗ trợ: {_g(ta, 'support_zone')} | Kháng cự: {_g(ta, 'resistance_zone')}"
         )
 
     previous = state.get("previous_thesis") or "Chưa có luận điểm trước đó."
@@ -230,10 +296,10 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
         except Exception:
             logger.warning("Could not save thesis to DB (DB might not be configured)")
 
-        return {
+        return _sanitize({
             "current_strategy": strategy,
             "final_message": final_message,
-        }
+        })
 
     except Exception as exc:
         logger.exception("Strategist node failed for %s: %s", ticker, exc)
@@ -267,9 +333,9 @@ def _extract_strategy_from_report(
 
         # Risk level
         risk = "MEDIUM"
-        if fa and fa.is_healthy and ta and ta.trend == "UP":
+        if fa and _g(fa, 'is_healthy') and ta and _g(ta, 'trend') == "UP":
             risk = "LOW"
-        elif ta and ta.trend == "DOWN":
+        elif ta and _g(ta, 'trend') == "DOWN":
             risk = "HIGH"
 
         return InvestmentStrategy(

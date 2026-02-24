@@ -16,7 +16,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -45,7 +45,7 @@ services:
     container_name: stock-agent-worker
     restart: unless-stopped
     env_file: .env
-    command: ["python", "worker.py"]
+    command: [ "python", "worker.py" ]
     depends_on:
       db:
         condition: service_healthy

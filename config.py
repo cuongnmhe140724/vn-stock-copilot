@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Telegram Bot token")
     telegram_chat_id: str = Field(default="", description="Telegram chat ID for alerts")
 
+    # LangSmith
+    langsmith_api_key: str = Field(default="", description="LangSmith API key")
+    langsmith_tracing: str = Field(default="false", description="Enable LangSmith tracing")
+    langchain_project: str = Field(default="vn-stock-copilot", description="LangSmith project name")
+
     # App
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
@@ -31,6 +36,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 

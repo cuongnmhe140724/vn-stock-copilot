@@ -13,6 +13,22 @@ from vnstock import Vnstock
 logger = logging.getLogger(__name__)
 
 
+def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten MultiIndex columns to plain strings.
+
+    vnstock DataFrames sometimes have tuple column names like
+    ('ROE', 'Q1 2024') which break json serialization.
+    """
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
+        df.columns = ["_".join(str(c) for c in col).strip("_") for col in df.columns]
+    else:
+        # Even single-level columns can be tuples in some pandas versions
+        df = df.copy()
+        df.columns = [str(c) for c in df.columns]
+    return df
+
+
 # ── Financial data ───────────────────────────────────────────────────────────
 
 
@@ -31,13 +47,13 @@ def get_financial_ratios(ticker: str, periods: int = 8) -> dict[str, Any]:
         if ratios is None or ratios.empty:
             return {"error": f"No financial ratio data found for {ticker}"}
 
-        # Limit to the most recent N periods
-        ratios = ratios.tail(periods)
+        # Flatten MultiIndex columns & limit to recent periods
+        ratios = _flatten_columns(ratios).tail(periods)
 
         # Income statement for growth calculation
         income = finance.income_statement(period="quarter", lang="en")
         if income is not None and not income.empty:
-            income = income.tail(periods)
+            income = _flatten_columns(income).tail(periods)
 
         result: dict[str, Any] = {
             "ticker": ticker,
@@ -76,8 +92,13 @@ def get_financial_ratios(ticker: str, periods: int = 8) -> dict[str, Any]:
 
         # Revenue & Profit growth (YoY from income statement)
         if income is not None and len(income) >= 5:
-            rev_col = _find_column(income, ["revenue", "doanh thu"])
-            profit_col = _find_column(income, ["profit", "loi nhuan", "net income"])
+            # Use specific column names to avoid matching "Revenue YoY (%)" etc.
+            rev_col = _find_column(income, ["revenue (bn", "net sales", "doanh thu thuần"])
+            if not rev_col:
+                rev_col = _find_column_exclude(income, ["revenue", "doanh thu"], exclude=["yoy", "%"])
+            profit_col = _find_column(income, ["net profit", "attributable to parent company (bn", "lợi nhuận ròng"])
+            if not profit_col:
+                profit_col = _find_column_exclude(income, ["profit", "loi nhuan"], exclude=["yoy", "%", "margin"])
 
             if rev_col:
                 current_rev = income[rev_col].iloc[-1]
@@ -114,7 +135,7 @@ def get_income_statement(ticker: str, periods: int = 8) -> dict[str, Any]:
         income = stock.finance.income_statement(period="quarter", lang="en")
         if income is None or income.empty:
             return {"error": f"No income statement data for {ticker}"}
-        return {"ticker": ticker, "data": income.tail(periods).to_dict(orient="records")}
+        return {"ticker": ticker, "data": _flatten_columns(income).tail(periods).to_dict(orient="records")}
     except Exception as exc:
         logger.exception("Failed to fetch income statement for %s", ticker)
         return {"error": str(exc)}
@@ -138,7 +159,7 @@ def get_price_history(
         )
         if df is None or df.empty:
             return {"error": f"No price data for {ticker}"}
-        return df
+        return _flatten_columns(df)
 
     except Exception as exc:
         logger.exception("Failed to fetch price history for %s", ticker)
@@ -247,6 +268,19 @@ def _find_column(df: pd.DataFrame, keywords: list[str]) -> str | None:
     for col in df.columns:
         for kw in keywords:
             if kw.lower() in str(col).lower():
+                return col
+    return None
+
+
+def _find_column_exclude(
+    df: pd.DataFrame, keywords: list[str], exclude: list[str] | None = None
+) -> str | None:
+    """Find a column matching keywords but NOT containing any exclude patterns."""
+    exclude = exclude or []
+    for col in df.columns:
+        col_str = str(col).lower()
+        if any(kw.lower() in col_str for kw in keywords):
+            if not any(ex.lower() in col_str for ex in exclude):
                 return col
     return None
 
