@@ -48,20 +48,22 @@ def get_financial_ratios(ticker: str, periods: int = 8) -> dict[str, Any]:
             return {"error": f"No financial ratio data found for {ticker}"}
 
         # Flatten MultiIndex columns & limit to recent periods
-        ratios = _flatten_columns(ratios).tail(periods)
+        # NOTE: vnstock returns data sorted DESCENDING (newest first),
+        # so .head() gives the most recent rows.
+        ratios = _flatten_columns(ratios).head(periods)
 
         # Income statement for growth calculation
         income = finance.income_statement(period="quarter", lang="en")
         if income is not None and not income.empty:
-            income = _flatten_columns(income).tail(periods)
+            income = _flatten_columns(income).head(periods)
 
         result: dict[str, Any] = {
             "ticker": ticker,
             "raw_ratios": ratios.to_dict(orient="records"),
         }
 
-        # Extract latest metrics from ratios
-        latest = ratios.iloc[-1] if not ratios.empty else {}
+        # Extract latest metrics from ratios (first row = newest)
+        latest = ratios.iloc[0] if not ratios.empty else {}
 
         # ROE
         for col in ratios.columns:
@@ -96,13 +98,15 @@ def get_financial_ratios(ticker: str, periods: int = 8) -> dict[str, Any]:
             rev_col = _find_column(income, ["revenue (bn", "net sales", "doanh thu thuần"])
             if not rev_col:
                 rev_col = _find_column_exclude(income, ["revenue", "doanh thu"], exclude=["yoy", "%"])
-            profit_col = _find_column(income, ["net profit", "attributable to parent company (bn", "lợi nhuận ròng"])
+            profit_col = _find_column(income, ["net profit", "attributable to parent company (bn", "attribute to parent company (bn", "lợi nhuận ròng"])
             if not profit_col:
                 profit_col = _find_column_exclude(income, ["profit", "loi nhuan"], exclude=["yoy", "%", "margin"])
 
+            # Data is sorted DESCENDING: iloc[0] = latest quarter,
+            # iloc[4] = same quarter last year
             if rev_col:
-                current_rev = income[rev_col].iloc[-1]
-                prev_rev = income[rev_col].iloc[-4]  # same quarter last year
+                current_rev = income[rev_col].iloc[0]
+                prev_rev = income[rev_col].iloc[4]  # same quarter last year
                 result["revenue_growth"] = (
                     _safe_growth(current_rev, prev_rev)
                 )
@@ -110,8 +114,8 @@ def get_financial_ratios(ticker: str, periods: int = 8) -> dict[str, Any]:
                 result["revenue_growth"] = 0.0
 
             if profit_col:
-                current_profit = income[profit_col].iloc[-1]
-                prev_profit = income[profit_col].iloc[-4]
+                current_profit = income[profit_col].iloc[0]
+                prev_profit = income[profit_col].iloc[4]
                 result["profit_growth"] = (
                     _safe_growth(current_profit, prev_profit)
                 )

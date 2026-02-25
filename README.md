@@ -58,9 +58,12 @@ stock-agent/
 │   └── graph.py              # StateGraph wiring & compilation
 ├── database/
 │   ├── __init__.py
-│   ├── schema.sql            # Postgres DDL (stocks, watchlist, theses, snapshots)
-│   ├── supabase_client.py    # Singleton Supabase client
-│   └── crud.py               # CRUD operations for all tables
+│   ├── migrations/
+│   │   └── 001_init_schema.sql  # Initial tables (stocks, watchlist, theses, snapshots)
+│   ├── migrate.py               # Python migration runner
+│   ├── schema.sql               # Postgres DDL reference
+│   ├── supabase_client.py       # Singleton Supabase client
+│   └── crud.py                  # CRUD operations for all tables
 ├── models/
 │   ├── __init__.py
 │   └── state.py              # Pydantic schemas & LangGraph AgentState
@@ -117,6 +120,51 @@ uvicorn main:app --reload --port 8000
 # Start worker (separate terminal)
 python worker.py
 ```
+
+## Database Setup & Migration
+
+### 1. Tạo Supabase project (miễn phí)
+
+1. Vào [supabase.com](https://supabase.com) → **Start your project** → đăng nhập bằng GitHub
+2. Tạo project mới, chọn region gần nhất (Singapore)
+3. Vào **Settings → API** → copy **Project URL** và **anon public key**
+
+### 2. Lấy Database Connection String
+
+1. Vào **Settings → Database** trong Supabase Dashboard
+2. Kéo xuống **Connection string** → chọn tab **URI**
+3. Copy connection string (dạng `postgresql://postgres.[ref]:[password]@...`)
+
+### 3. Cấu hình `.env`
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-anon-key
+SUPABASE_PASSWORD=your-db-password
+DATABASE_URL=postgresql://postgres.your-ref:your-password@aws-0-region.pooler.supabase.com:6543/postgres
+```
+
+### 4. Chạy Migration
+
+```bash
+# Chạy tất cả migration chưa áp dụng
+python -m database.migrate
+
+# Kiểm tra trạng thái migration
+python -m database.migrate --status
+```
+
+### 5. Tạo migration mới
+
+Tạo file SQL mới trong `database/migrations/` với prefix số thứ tự:
+
+```
+database/migrations/
+├── 001_init_schema.sql        # Tạo bảng stocks, watchlist, theses, snapshots
+├── 002_add_new_feature.sql    # Migration tiếp theo...
+```
+
+> **Lưu ý**: Migration runner tự động track file đã chạy trong bảng `_migrations`, nên mỗi file chỉ chạy 1 lần. **Không sửa file migration đã chạy** — thay vào đó tạo file migration mới.
 
 ## API Reference
 
