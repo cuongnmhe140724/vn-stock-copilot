@@ -2,7 +2,7 @@
 
 Three nodes:
   1. researcher_node  – fetches raw data from vnstock + news
-  2. analyst_node     – sends data to Claude for structured analysis
+  2. analyst_node     – ReAct agent with SMC/Elliott/Wyckoff tools + structured analysis
   3. strategist_node  – produces final strategy & Telegram-ready message
 """
 
@@ -14,12 +14,14 @@ from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.prebuilt import create_react_agent
 
 from config import get_settings
 from models.state import AgentState, FinancialAnalysis, TechnicalSignals, InvestmentStrategy
 from services import vnstock_service, news_service
 from database import crud
 from prompts.system_prompts import ANALYSIS_SYSTEM_PROMPT, ANALYST_PROMPT
+from agents.tools import ANALYST_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -152,37 +154,47 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NODE 2: Analyst — structured analysis via Claude
+# NODE 2: Analyst — ReAct agent with SMC/Elliott/Wyckoff tools
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def analyst_node(state: AgentState) -> dict[str, Any]:
-    """Send raw data to Claude and parse structured FA/TA analysis."""
+    """Run a ReAct agent that calls SMC, Elliott Wave, and Wyckoff tools,
+    then synthesises structured FA/TA analysis as JSON."""
 
     ticker = state["ticker"]
-    logger.info("📊 Analyst: analysing %s with Claude", ticker)
+    logger.info("📊 Analyst: analysing %s with ReAct agent (3 tools)", ticker)
 
     llm = _get_llm()
 
-    # Build data context for the LLM
+    # Build data context for the agent
     data_context = (
         f"## Dữ liệu tài chính cho {ticker}\n\n"
         f"### Financial Ratios\n```json\n{_safe_json_dumps(state['raw_financials'])}\n```\n\n"
         f"### Price & Technical Data\n```json\n{_safe_json_dumps(state['raw_ohlc'])}\n```\n\n"
         f"### Tin tức gần đây\n" + "\n".join(f"- {n}" for n in state.get("raw_news", []))
+        + f"\n\n**Mã chứng khoán cần phân tích: {ticker}**"
     )
 
-    messages = [
-        SystemMessage(content=ANALYST_PROMPT),
-        HumanMessage(content=data_context),
-    ]
-
     try:
-        response = llm.invoke(messages)
-        content = response.content.strip()
+        # Create a ReAct sub-agent with the 3 TA tools
+        react_agent = create_react_agent(
+            model=llm,
+            tools=ANALYST_TOOLS,
+            prompt=ANALYST_PROMPT,
+        )
 
-        # Try to parse JSON from response
-        # Handle markdown code blocks
+        # Invoke the ReAct agent
+        agent_result = react_agent.invoke(
+            {"messages": [HumanMessage(content=data_context)]}
+        )
+
+        # Extract the final message from agent output
+        final_msg = agent_result["messages"][-1]
+        content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+        content = content.strip()
+
+        # Parse JSON from response (handle markdown code blocks)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
@@ -190,8 +202,12 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
 
         parsed = json.loads(content)
 
+        # Extract structured data
         fa_data = parsed.get("financial_analysis", {})
         ta_data = parsed.get("technical_signals", {})
+        smc_data = parsed.get("smc_analysis")
+        elliott_data = parsed.get("elliott_analysis")
+        wyckoff_data = parsed.get("wyckoff_analysis")
 
         financial_analysis = FinancialAnalysis(
             revenue_growth=fa_data.get("revenue_growth", 0),
@@ -213,6 +229,23 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
         return _sanitize({
             "financial_analysis": financial_analysis,
             "technical_signals": technical_signals,
+            "smc_analysis": smc_data,
+            "elliott_analysis": elliott_data,
+            "wyckoff_analysis": wyckoff_data,
+        })
+
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Analyst agent returned non-JSON for %s, falling back to raw text: %s",
+            ticker, exc,
+        )
+        # Fallback: still try to return what we got from the agent
+        return _sanitize({
+            "financial_analysis": None,
+            "technical_signals": None,
+            "smc_analysis": None,
+            "elliott_analysis": None,
+            "wyckoff_analysis": None,
         })
 
     except Exception as exc:
@@ -220,6 +253,9 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
         return {
             "financial_analysis": None,
             "technical_signals": None,
+            "smc_analysis": None,
+            "elliott_analysis": None,
+            "wyckoff_analysis": None,
         }
 
 
@@ -239,6 +275,9 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
     # Build context from all previous analysis
     fa = state.get("financial_analysis")
     ta = state.get("technical_signals")
+    smc = state.get("smc_analysis")
+    elliott = state.get("elliott_analysis")
+    wyckoff = state.get("wyckoff_analysis")
 
     fa_summary = ""
     if fa:
@@ -256,6 +295,37 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
             f"Hỗ trợ: {_g(ta, 'support_zone')} | Kháng cự: {_g(ta, 'resistance_zone')}"
         )
 
+    # SMC summary
+    smc_summary = ""
+    if smc:
+        smc_summary = (
+            f"Xu hướng SMC: {smc.get('current_trend', 'N/A')}\n"
+            f"CHoCH gần nhất: {_safe_json_dumps(smc.get('recent_choch'))}\n"
+            f"Bullish OB: {_safe_json_dumps(smc.get('active_bullish_order_blocks', []))}\n"
+            f"Bearish OB: {_safe_json_dumps(smc.get('active_bearish_order_blocks', []))}\n"
+            f"FVG chưa lấp: {_safe_json_dumps(smc.get('unfilled_fvg', []))}"
+        )
+
+    # Elliott summary
+    elliott_summary = ""
+    if elliott:
+        elliott_summary = (
+            f"Cấu trúc: {elliott.get('primary_structure', 'N/A')}\n"
+            f"Sóng hiện tại: {elliott.get('current_wave_label', 'N/A')}\n"
+            f"Mục tiêu Fibonacci: {_safe_json_dumps(elliott.get('target_fibonacci_zones', []))}\n"
+            f"Invalidation: {elliott.get('invalidation_level', 'N/A')}"
+        )
+
+    # Wyckoff summary
+    wyckoff_summary = ""
+    if wyckoff:
+        wyckoff_summary = (
+            f"Giai đoạn: {wyckoff.get('phase', 'N/A')}\n"
+            f"POC: {_safe_json_dumps(wyckoff.get('point_of_control'))}\n"
+            f"Value Area: {_safe_json_dumps(wyckoff.get('value_area'))}\n"
+            f"Trading Range: {_safe_json_dumps(wyckoff.get('trading_range'))}"
+        )
+
     previous = state.get("previous_thesis") or "Chưa có luận điểm trước đó."
     news_text = "\n".join(f"- {n}" for n in state.get("raw_news", []))
 
@@ -263,7 +333,10 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
         f"# Phân tích mã {ticker}\n\n"
         f"**Giá hiện tại**: {state.get('current_price', 0):,.0f} VNĐ\n\n"
         f"## Fundamental Analysis\n{fa_summary}\n\n"
-        f"## Technical Analysis\n{ta_summary}\n\n"
+        f"## Technical Analysis (Classic)\n{ta_summary}\n\n"
+        f"## Smart Money Concepts (SMC)\n{smc_summary}\n\n"
+        f"## Elliott Wave\n{elliott_summary}\n\n"
+        f"## Wyckoff Analysis\n{wyckoff_summary}\n\n"
         f"## Tin tức\n{news_text}\n\n"
         f"## Luận điểm đầu tư trước đó\n{previous}\n"
     )
@@ -319,17 +392,44 @@ def _extract_strategy_from_report(
 
         fa = state.get("financial_analysis")
         ta = state.get("technical_signals")
+        smc = state.get("smc_analysis")
+        elliott = state.get("elliott_analysis")
         current_price = state.get("current_price", 0)
 
-        # Estimate entry zone around -5% to current price
+        # Try to use Order Block zones for entry if available
         entry_low = current_price * 0.92
         entry_high = current_price * 0.98
 
-        # Estimate target +20%
-        target = current_price * 1.20
+        if smc:
+            bullish_obs = smc.get("active_bullish_order_blocks", [])
+            if bullish_obs:
+                # Use the nearest bullish OB as entry zone
+                nearest_ob = bullish_obs[-1] if bullish_obs else None
+                if nearest_ob and isinstance(nearest_ob, dict):
+                    ob_bottom = nearest_ob.get("bottom", 0)
+                    ob_top = nearest_ob.get("top", 0)
+                    if ob_bottom > 0 and ob_top > 0:
+                        entry_low = ob_bottom
+                        entry_high = ob_top
 
-        # Stop-loss at -10%
+        # Try to use Fibonacci targets if available
+        target = current_price * 1.20
+        if elliott:
+            fib_targets = elliott.get("target_fibonacci_zones", [])
+            if fib_targets and isinstance(fib_targets, list):
+                for ft in fib_targets:
+                    if isinstance(ft, dict):
+                        t_price = ft.get("price", 0)
+                        if t_price > current_price:
+                            target = t_price
+                            break
+
+        # Stop-loss: use invalidation level if available, else -10%
         stop = current_price * 0.90
+        if elliott:
+            inv = elliott.get("invalidation_level")
+            if inv and isinstance(inv, (int, float)) and inv > 0:
+                stop = inv
 
         # Risk level
         risk = "MEDIUM"

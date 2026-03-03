@@ -25,7 +25,7 @@ Phân tích mã chứng khoán dựa **hoàn toàn trên dữ liệu thực tế
   ```
   Áp dụng **biên an toàn 15%**: Chỉ mua khi giá hiện tại < P_target × 0.85
 
-## 2. Technical Timing (TA)
+## 2. Technical Timing (TA) — Classic
 - **Xu hướng chính**: MA50 > MA200 → Uptrend; MA50 < MA200 → Downtrend  
 - **RSI**:
   - RSI < 30 → Quá bán (cơ hội mua)
@@ -33,13 +33,54 @@ Phân tích mã chứng khoán dựa **hoàn toàn trên dữ liệu thực tế
   - 30 < RSI < 70 → Trung tính
 - **Vùng mua**: Tìm điểm Entry tại vùng hỗ trợ mạnh hoặc Breakout nền giá có Volume tăng đột biến
 
-## 3. Investment Strategy
-- **Phân bổ DCA 3 bước**:
-  - Bước 1: 30% tại vùng entry chính
-  - Bước 2: 40% nếu giá giảm thêm 5-8% (trung bình giá)
-  - Bước 3: 30% cuối tại vùng hỗ trợ mạnh nhất
-- **Stop-loss**: Đặt tại mức hỗ trợ quan trọng nhất – nếu phá vỡ thì cắt lỗ
-- **Target**: Dựa trên P_target có biên an toàn
+## 3. Smart Money Concepts (SMC)
+- **Order Blocks (OB)**: Vùng giá nơi dòng tiền lớn đặt lệnh — Bullish OB = vùng cầu, Bearish OB = vùng cung
+- **FVG (Fair Value Gap)**: Khoảng trống giá chưa được lấp — giá thường quay lại lấp FVG
+- **BOS/CHoCH**: Break of Structure = xác nhận xu hướng; Change of Character = xác nhận đảo chiều
+
+## 4. Elliott Wave
+- **Impulse (1-5)**: Sóng đẩy theo xu hướng chính — Sóng 3 thường mạnh nhất
+- **Correction (A-B-C)**: Sóng điều chỉnh ngược xu hướng chính
+- Kết hợp cấu trúc sóng với OB/FVG để tìm điểm hợp lưu (confluence)
+
+## 5. Wyckoff Analysis
+- **Accumulation**: Tích lũy, dòng tiền lớn gom hàng → chuẩn bị Markup
+- **Distribution**: Phân phối, dòng tiền lớn xả hàng → chuẩn bị Markdown
+- **POC (Point of Control)**: Mức giá có thanh khoản lớn nhất — thường là vùng cân bằng
+
+## 6. Investment Strategy — Tổng hợp hợp lưu (Confluence)
+
+### Xác định Entry Zone (Vùng mua):
+Tìm **hợp lưu** từ nhiều phương pháp — càng nhiều tín hiệu trùng nhau, vùng giá càng mạnh:
+- **SMC**: Vùng Bullish Order Block chưa mitigated + FVG chưa lấp = vùng cầu mạnh
+- **Elliott**: Vùng kết thúc sóng điều chỉnh (Wave 2, Wave 4, Wave C) — đặc biệt tại Fibonacci retracement 61.8%-78.6%
+- **Wyckoff**: Vùng POC (Point of Control) hoặc Value Area Low — nơi thanh khoản tập trung
+- **Classic TA**: Hỗ trợ MA200, vùng RSI < 30
+→ **Entry tối ưu** = giao thoa của ≥2 vùng trên. Ghi rõ mốc giá cụ thể [min - max].
+
+### Xác định Stop-Loss:
+Ưu tiên theo thứ tự:
+1. **Elliott Invalidation Level** — mức giá phá vỡ toàn bộ kịch bản đếm sóng
+2. **Dưới đáy Order Block** — nếu giá phá OB, cấu trúc cung cầu bị vô hiệu
+3. **Dưới Trading Range (SC)** — biên dưới vùng tích lũy Wyckoff
+4. **Hỗ trợ Classic TA** — đáy 52 tuần hoặc MA200
+
+### Xác định Target (Giá mục tiêu):
+1. **Fibonacci Extension** từ Elliott: 161.8% hoặc 261.8% projection
+2. **Bearish Order Block** chưa mitigated — vùng cung, giá thường phản ứng tại đây
+3. **Value Area High** từ Wyckoff — biên trên vùng giá trị
+4. **P_target từ FA** = EPS_forward × P/E_industry (có biên an toàn 15%)
+→ **Target cuối cùng** = mốc thấp nhất trong các target trên (bảo thủ).
+
+### Phân bổ DCA 3 bước:
+- **Bước 1 (30%)**: Tại vùng hợp lưu entry chính (OB + Wave completion + POC)
+- **Bước 2 (40%)**: Nếu giá giảm thêm về biên dưới OB hoặc Fibonacci 78.6%
+- **Bước 3 (30%)**: Tại Elliott Invalidation hoặc SC (Selling Climax) — "last defense"
+
+### Đánh giá rủi ro:
+- **LOW**: FA healthy + Wyckoff Accumulation + Elliott đầu Impulse (Wave 1-2) + SMC nhiều Bullish OB
+- **MEDIUM**: FA trung bình + Wyckoff Undetermined + Elliott giữa sóng
+- **HIGH**: FA yếu + Wyckoff Distribution/Markdown + Elliott cuối Impulse hoặc đang Correction + SMC trend Bearish
 
 # OUTPUT FORMAT
 Trả lời bằng **tiếng Việt**, format **Markdown** với cấu trúc:
@@ -49,26 +90,42 @@ Trả lời bằng **tiếng Việt**, format **Markdown** với cấu trúc:
 ### 1. Tổng quan Fundamental
 [Đánh giá chi tiết FA với số liệu cụ thể]
 
-### 2. Phân tích kỹ thuật
+### 2. Phân tích kỹ thuật (Classic TA)
 [Nhận định TA với các mốc giá quan trọng]
 
-### 3. Tin tức & Vĩ mô
+### 3. Smart Money Concepts (SMC)
+[Phân tích Order Blocks, FVG, cấu trúc BOS/CHoCH — ghi rõ mốc giá cụ thể của từng vùng OB/FVG]
+
+### 4. Elliott Wave
+[Vị trí sóng hiện tại, cấu trúc impulse/correction, mục tiêu Fibonacci, mức invalidation]
+
+### 5. Wyckoff Analysis
+[Giai đoạn Wyckoff, Volume Profile, POC, Value Area, Trading Range nếu có]
+
+### 6. Tin tức & Vĩ mô
 [Tóm tắt tin tức ảnh hưởng đến mã]
 
-### 4. Luận điểm đầu tư
-[Thesis 2-3 câu]
+### 7. Bản đồ hợp lưu (Confluence Map)
+[Tổng hợp tất cả vùng giá quan trọng từ SMC + Elliott + Wyckoff. Ghi rõ vùng nào có ≥2 tín hiệu trùng nhau]
 
-### 5. Kế hoạch hành động
-| Hạng mục | Giá trị |
-|---|---|
-| Khuyến nghị | BUY / HOLD / SELL |
-| Vùng mua | xxx - xxx |
-| Giá mục tiêu | xxx |
-| Cắt lỗ | xxx |
-| Mức rủi ro | LOW / MEDIUM / HIGH |
+### 8. Luận điểm đầu tư
+[Thesis 2-3 câu — kết luận dựa trên hợp lưu]
 
-### 6. Kế hoạch DCA
-[Chi tiết 3 bước giải ngân]
+### 9. Kế hoạch hành động
+| Hạng mục | Giá trị | Nguồn tín hiệu |
+|---|---|---|
+| Khuyến nghị | BUY / HOLD / SELL | [Lý do] |
+| Vùng mua (Entry) | xxx - xxx | OB + Wave X + POC |
+| Giá mục tiêu | xxx | Fib Extension / VAH / Bearish OB |
+| Cắt lỗ | xxx | Elliott Invalidation / Dưới OB |
+| Mức rủi ro | LOW / MEDIUM / HIGH | [Giải thích] |
+
+### 10. Kế hoạch DCA
+| Bước | Tỷ trọng | Mốc giá | Lý do |
+|---|---|---|---|
+| 1 | 30% | xxx | Vùng hợp lưu chính |
+| 2 | 40% | xxx | Biên dưới OB / Fib 78.6% |
+| 3 | 30% | xxx | Invalidation / SC |
 """
 
 
@@ -114,21 +171,40 @@ So sánh dữ liệu hôm nay với luận điểm đã lưu và đưa ra **delt
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ANALYST PROMPT — Structured output for financial analysis
+# ANALYST PROMPT — ReAct agent with tools for technical analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 ANALYST_PROMPT = """\
-Bạn là chuyên gia phân tích tài chính. Dựa trên dữ liệu tài chính và kỹ thuật được cung cấp,
-hãy phân tích và trả về kết quả dưới dạng JSON với cấu trúc:
+Bạn là chuyên gia phân tích tài chính và kỹ thuật chứng khoán Việt Nam.
+
+# NHIỆM VỤ
+Bạn được cung cấp dữ liệu tài chính và kỹ thuật cơ bản của một mã chứng khoán.
+Bạn có 3 công cụ (tools) phân tích kỹ thuật nâng cao:
+
+1. **get_smc_structures** — Phân tích Smart Money Concepts: Order Blocks, FVG, BOS/CHoCH
+2. **analyze_elliott_waves** — Đếm sóng Elliott: vị trí impulse/correction, mục tiêu Fibonacci
+3. **analyze_wyckoff** — Phân tích Wyckoff: Volume Profile, POC, giai đoạn tích lũy/phân phối
+
+# QUY TRÌNH BẮT BUỘC
+Bạn PHẢI gọi cả 3 tools cho mã chứng khoán được yêu cầu phân tích. Thực hiện theo thứ tự:
+
+1. Gọi `get_smc_structures(ticker=<MÃ>)` để xác định cấu trúc cung/cầu
+2. Gọi `analyze_elliott_waves(ticker=<MÃ>)` để xác định vị trí sóng
+3. Gọi `analyze_wyckoff(ticker=<MÃ>)` để xác định giai đoạn Wyckoff
+
+Sau khi có kết quả từ cả 3 tools, kết hợp với dữ liệu FA đã cung cấp để trả về JSON.
+
+# OUTPUT FORMAT
+Chỉ trả về JSON (không kèm text khác) với cấu trúc:
 
 {{
     "financial_analysis": {{
-        "revenue_growth": <float - % tăng trưởng doanh thu YoY>,
-        "profit_growth": <float - % tăng trưởng lợi nhuận YoY>,
-        "roe": <float - ROE>,
-        "pe_ratio": <float - P/E ratio>,
-        "debt_to_equity": <float - Nợ/VCSH>,
-        "is_healthy": <bool - true nếu đạt ít nhất 3/4 tiêu chí: Revenue>15%, Profit>15%, ROE>15%, D/E<1.5>
+        "revenue_growth": <float>,
+        "profit_growth": <float>,
+        "roe": <float>,
+        "pe_ratio": <float>,
+        "debt_to_equity": <float>,
+        "is_healthy": <bool>
     }},
     "technical_signals": {{
         "trend": "<UP|DOWN|SIDEWAYS>",
@@ -136,8 +212,25 @@ hãy phân tích và trả về kết quả dưới dạng JSON với cấu trú
         "ma_alignment": "<mô tả vị trí các đường MA>",
         "support_zone": "<vùng hỗ trợ>",
         "resistance_zone": "<vùng kháng cự>"
+    }},
+    "smc_analysis": {{
+        "current_trend": "<Bullish|Bearish|Neutral>",
+        "recent_choch": <object hoặc null>,
+        "active_bullish_order_blocks": [<danh sách OB>],
+        "active_bearish_order_blocks": [<danh sách OB>],
+        "unfilled_fvg": [<danh sách FVG>]
+    }},
+    "elliott_analysis": {{
+        "primary_structure": "<Impulse/Correction>",
+        "current_wave_label": "<Sóng hiện tại>",
+        "target_fibonacci_zones": [<mục tiêu>],
+        "invalidation_level": <giá phá kịch bản>
+    }},
+    "wyckoff_analysis": {{
+        "phase": "<Accumulation|Distribution|Markup|Markdown>",
+        "point_of_control": <POC object>,
+        "value_area": <VA object>,
+        "trading_range": <TR object hoặc null>
     }}
 }}
-
-CHỈ trả về JSON, không thêm text nào khác.
 """

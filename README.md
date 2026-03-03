@@ -18,9 +18,15 @@ flowchart LR
 
     subgraph LangGraph ["LangGraph Pipeline"]
         R["🔍 Researcher"]
-        A["📊 Analyst"]
+        A["📊 Analyst<br/>(ReAct Agent)"]
         S["🎯 Strategist"]
         R --> A --> S
+    end
+
+    subgraph Tools ["TA Tools (called by Analyst)"]
+        T1["🔧 SMC<br/>Order Block · FVG · BOS/CHoCH"]
+        T2["🔧 Elliott Wave<br/>ZigZag · Wave Count · Fib"]
+        T3["🔧 Wyckoff<br/>Volume Profile · POC · Phase"]
     end
 
     subgraph Data ["Data Sources"]
@@ -41,11 +47,50 @@ flowchart LR
     EP --> R
     R --> VN
     R --> NW
+    A -->|"tool calls"| T1
+    A -->|"tool calls"| T2
+    A -->|"tool calls"| T3
+    T1 --> VN
+    T2 --> VN
+    T3 --> VN
     S --> DB
     S -->|"Report"| TG
     CJ --> DB
     CJ -->|"Alerts"| TG
     CJ --> VN
+```
+
+## Pipeline Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User / Telegram
+    participant R as 🔍 Researcher
+    participant A as 📊 Analyst (ReAct)
+    participant SMC as 🔧 SMC Tool
+    participant EW as 🔧 Elliott Tool
+    participant WK as 🔧 Wyckoff Tool
+    participant S as 🎯 Strategist
+    participant DB as Supabase
+
+    U->>R: /analyze FPT
+    R->>R: Fetch financials, OHLCV, news
+    R->>A: raw_financials, raw_ohlc, raw_news
+
+    Note over A: ReAct Agent tự chọn tools
+    A->>SMC: get_smc_structures("FPT")
+    SMC-->>A: trend, OBs, FVGs, BOS/CHoCH
+    A->>EW: analyze_elliott_waves("FPT")
+    EW-->>A: wave label, Fib targets, invalidation
+    A->>WK: analyze_wyckoff("FPT")
+    WK-->>A: phase, POC, Value Area, range
+
+    A->>A: Synthesise FA + TA + SMC + Elliott + Wyckoff → JSON
+    A->>S: structured analysis (6 dimensions)
+
+    S->>S: Generate final report + DCA plan
+    S->>DB: Save thesis
+    S->>U: 📋 Markdown report
 ```
 
 ## Project Structure
@@ -55,24 +100,28 @@ stock-agent/
 ├── agents/
 │   ├── __init__.py
 │   ├── nodes.py              # LangGraph nodes (researcher, analyst, strategist)
+│   ├── tools.py              # LangChain tools (SMC, Elliott, Wyckoff)
 │   └── graph.py              # StateGraph wiring & compilation
 ├── database/
 │   ├── __init__.py
 │   ├── migrations/
-│   │   └── 001_init_schema.sql  # Initial tables (stocks, watchlist, theses, snapshots)
-│   ├── migrate.py               # Python migration runner
-│   ├── schema.sql               # Postgres DDL reference
-│   ├── supabase_client.py       # Singleton Supabase client
-│   └── crud.py                  # CRUD operations for all tables
+│   │   └── 001_init_schema.sql
+│   ├── migrate.py
+│   ├── schema.sql
+│   ├── supabase_client.py
+│   └── crud.py
 ├── models/
 │   ├── __init__.py
 │   └── state.py              # Pydantic schemas & LangGraph AgentState
 ├── prompts/
 │   ├── __init__.py
-│   └── system_prompts.py     # Super System Prompt + Daily Follow-up Prompt
+│   └── system_prompts.py     # Analysis + Analyst (ReAct) + Daily prompts
 ├── services/
 │   ├── __init__.py
-│   ├── vnstock_service.py    # Financial data & technical indicators
+│   ├── vnstock_service.py    # Financial data & basic technical indicators
+│   ├── smc_calculator.py     # Smart Money Concepts engine
+│   ├── elliott_engine.py     # Elliott Wave engine (ZigZag + Rules)
+│   ├── wyckoff_engine.py     # Wyckoff engine (Volume Profile + Phases)
 │   ├── news_service.py       # News headline search
 │   └── telegram_service.py   # Telegram Bot message delivery
 ├── main.py                   # FastAPI application
@@ -84,6 +133,32 @@ stock-agent/
 ├── .env.example
 └── README.md
 ```
+
+## Analyst Node — ReAct Agent with 3 Tools
+
+Analyst node sử dụng `create_react_agent` (LangGraph) thay vì gọi LLM trực tiếp. Agent tự động gọi 3 tools phân tích kỹ thuật nâng cao:
+
+| Tool | Engine | Chức năng | Lookback |
+|------|--------|-----------|----------|
+| `get_smc_structures` | `SMCCalculator` | Swing Points, BOS/CHoCH, FVG, Order Blocks | 100 nến |
+| `analyze_elliott_waves` | `ElliottWaveEngine` | ZigZag filter, wave count (1-5 / A-B-C), Fibonacci targets | 200 nến |
+| `analyze_wyckoff` | `WyckoffEngine` | Volume Profile, POC, Value Area, Trading Range, phase detection | 200 nến |
+
+### SMC (Smart Money Concepts)
+- **Swing Points**: Thuật toán cửa sổ trượt (fractal) tìm đỉnh/đáy cục bộ
+- **BOS/CHoCH**: Xác định Break of Structure (tiếp diễn) / Change of Character (đảo chiều)
+- **FVG**: Khoảng trống giá — `low[i-1] > high[i+1]` = Bullish FVG
+- **Order Block**: Nến giảm cuối cùng trước impulse tạo BOS
+
+### Elliott Wave
+- **ZigZag**: Lọc nhiễu biến động < 5%, chỉ giữ pivot points chính
+- **Rules Engine**: 3 quy tắc bất biến (Wave 2 < 100% W1, Wave 3 không ngắn nhất, Wave 4 ≥ Wave 1 top)
+- **Fibonacci**: Projection 100%, 161.8%, 261.8% cho mục tiêu sóng
+
+### Wyckoff
+- **Volume Profile**: Tổng volume tại từng mức giá (histogram bins) thay vì theo thời gian
+- **POC**: Point of Control — mức giá có thanh khoản lớn nhất
+- **Phase**: Accumulation / Distribution / Markup / Markdown
 
 ## Quick Start
 
@@ -212,12 +287,13 @@ Run manually: `python worker.py --once`
 |-----------|-----------|
 | Language | Python 3.11+ |
 | API Framework | FastAPI + Uvicorn |
-| AI/LLM | LangGraph + Claude 3.5 Sonnet (Anthropic) |
+| AI/LLM | LangGraph + Claude (Anthropic) |
+| Agent Framework | LangGraph `create_react_agent` (ReAct) |
 | Market Data | vnstock (HOSE, HNX, UPCOM) |
+| Technical Analysis | SMC, Elliott Wave, Wyckoff (custom engines) + pandas, numpy |
 | Database | Supabase (PostgreSQL + pgvector) |
 | Scheduler | APScheduler |
 | Notifications | Telegram Bot API |
-| Technical Analysis | pandas, numpy, ta |
 | Container | Docker + docker-compose |
 
 ## License

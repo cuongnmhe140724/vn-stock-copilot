@@ -40,6 +40,11 @@ class AgentState(TypedDict):
     financial_analysis: Optional[FinancialAnalysis]
     technical_signals: Optional[TechnicalSignals]
     
+    # Advanced TA from tools
+    smc_analysis: Optional[dict]
+    elliott_analysis: Optional[dict]
+    wyckoff_analysis: Optional[dict]
+    
     # Kết quả cuối cùng
     previous_thesis: Optional[str] # Lấy từ DB để so sánh
     current_strategy: Optional[InvestmentStrategy]
