@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from config import get_settings
-from models.state import AgentState, FinancialAnalysis, TechnicalSignals, InvestmentStrategy
+from models.state import AgentState, FinancialAnalysis, TechnicalSignals, InvestmentStrategy, ScenarioDetail
 from services import vnstock_service, news_service
 from database import crud
 from prompts.system_prompts import ANALYSIS_SYSTEM_PROMPT, ANALYST_PROMPT
@@ -92,15 +92,30 @@ def _g(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def _get_llm() -> ChatAnthropic:
-    """Return a configured Claude LLM instance."""
+def _get_llm(mode: str = "agent_mode"):
+    """Return a configured LLM instance based on mode.
+
+    agent_mode  → Claude (Anthropic)
+    signal_mode → DeepSeek R1 (OpenAI-compatible)
+    """
     settings = get_settings()
-    return ChatAnthropic(
-        model=settings.anthropic_model,
-        api_key=settings.anthropic_api_key,
-        max_tokens=4096,
-        temperature=0.3,
-    )
+
+    if mode == "signal_mode":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=settings.deepseek_model,
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+            max_tokens=4096,
+            temperature=0,
+        )
+    else:  # agent_mode (default)
+        return ChatAnthropic(
+            model=settings.anthropic_model,
+            api_key=settings.anthropic_api_key,
+            max_tokens=4096,
+            temperature=0.3,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,12 +150,19 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
     # News
     raw_news = news_service.search_news_sync(ticker, limit=5)
 
-    # Previous thesis from DB (for comparison)
+    # Previous thesis & scenarios from DB (for comparison)
     previous_thesis = None
+    previous_scenarios = None
     try:
         thesis = crud.get_latest_thesis(ticker)
         if thesis:
             previous_thesis = thesis.get("thesis_content", "")
+            # Parse scenarios from DB
+            raw_scenarios = thesis.get("scenarios_json", "[]")
+            try:
+                previous_scenarios = json.loads(raw_scenarios) if isinstance(raw_scenarios, str) else raw_scenarios
+            except Exception:
+                previous_scenarios = None
     except Exception:
         logger.warning("Could not fetch previous thesis from DB")
 
@@ -150,6 +172,7 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
         "raw_ohlc": raw_ohlc,
         "raw_news": raw_news,
         "previous_thesis": previous_thesis,
+        "previous_scenarios": previous_scenarios,
     })
 
 
@@ -159,15 +182,26 @@ def researcher_node(state: AgentState) -> dict[str, Any]:
 
 
 def analyst_node(state: AgentState) -> dict[str, Any]:
-    """Run a ReAct agent that calls SMC, Elliott Wave, and Wyckoff tools,
-    then synthesises structured FA/TA analysis as JSON."""
+    """Run analysis with mode-appropriate strategy.
 
+    agent_mode  → ReAct agent with tools (Claude)
+    signal_mode → Direct tool calls + single LLM invoke (DeepSeek R1)
+    """
+    mode = state.get("mode", "agent_mode")
     ticker = state["ticker"]
-    logger.info("📊 Analyst: analysing %s with ReAct agent (3 tools)", ticker)
+    logger.info("📊 Analyst: analysing %s [%s]", ticker, mode)
 
-    llm = _get_llm()
+    if mode == "signal_mode":
+        return _analyst_signal_mode(state)
+    else:
+        return _analyst_agent_mode(state)
 
-    # Build data context for the agent
+
+def _analyst_agent_mode(state: AgentState) -> dict[str, Any]:
+    """ReAct agent with SMC/Elliott/Wyckoff tools — for Claude."""
+    ticker = state["ticker"]
+    llm = _get_llm("agent_mode")
+
     data_context = (
         f"## Dữ liệu tài chính cho {ticker}\n\n"
         f"### Financial Ratios\n```json\n{_safe_json_dumps(state['raw_financials'])}\n```\n\n"
@@ -177,86 +211,165 @@ def analyst_node(state: AgentState) -> dict[str, Any]:
     )
 
     try:
-        # Create a ReAct sub-agent with the 3 TA tools
         react_agent = create_react_agent(
             model=llm,
             tools=ANALYST_TOOLS,
             prompt=ANALYST_PROMPT,
         )
 
-        # Invoke the ReAct agent
         agent_result = react_agent.invoke(
             {"messages": [HumanMessage(content=data_context)]}
         )
 
-        # Extract the final message from agent output
         final_msg = agent_result["messages"][-1]
         content = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
-        content = content.strip()
-
-        # Parse JSON from response (handle markdown code blocks)
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-
-        parsed = json.loads(content)
-
-        # Extract structured data
-        fa_data = parsed.get("financial_analysis", {})
-        ta_data = parsed.get("technical_signals", {})
-        smc_data = parsed.get("smc_analysis")
-        elliott_data = parsed.get("elliott_analysis")
-        wyckoff_data = parsed.get("wyckoff_analysis")
-
-        financial_analysis = FinancialAnalysis(
-            revenue_growth=fa_data.get("revenue_growth", 0),
-            profit_growth=fa_data.get("profit_growth", 0),
-            roe=fa_data.get("roe", 0),
-            pe_ratio=fa_data.get("pe_ratio", 0),
-            debt_to_equity=fa_data.get("debt_to_equity", 0),
-            is_healthy=fa_data.get("is_healthy", False),
-        )
-
-        technical_signals = TechnicalSignals(
-            trend=ta_data.get("trend", "SIDEWAYS"),
-            rsi=ta_data.get("rsi", 50),
-            ma_alignment=ta_data.get("ma_alignment", "N/A"),
-            support_zone=ta_data.get("support_zone", "N/A"),
-            resistance_zone=ta_data.get("resistance_zone", "N/A"),
-        )
-
-        return _sanitize({
-            "financial_analysis": financial_analysis,
-            "technical_signals": technical_signals,
-            "smc_analysis": smc_data,
-            "elliott_analysis": elliott_data,
-            "wyckoff_analysis": wyckoff_data,
-        })
-
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "Analyst agent returned non-JSON for %s, falling back to raw text: %s",
-            ticker, exc,
-        )
-        # Fallback: still try to return what we got from the agent
-        return _sanitize({
-            "financial_analysis": None,
-            "technical_signals": None,
-            "smc_analysis": None,
-            "elliott_analysis": None,
-            "wyckoff_analysis": None,
-        })
+        return _parse_analyst_response(content, ticker)
 
     except Exception as exc:
-        logger.exception("Analyst node failed for %s: %s", ticker, exc)
-        return {
+        logger.exception("Analyst agent_mode failed for %s: %s", ticker, exc)
+        return _empty_analyst_result()
+
+
+def _analyst_signal_mode(state: AgentState) -> dict[str, Any]:
+    """Direct tool execution + single LLM call — for DeepSeek R1.
+
+    1. Call SMC, Elliott, Wyckoff tools directly (as Python functions)
+    2. Combine all results into a single prompt
+    3. Send to DeepSeek R1 (no tool calling, no ReAct)
+    """
+    ticker = state["ticker"]
+    llm = _get_llm("signal_mode")
+
+    # ── 1. Run tools directly ────────────────────────────────────────────
+    from agents.tools import get_smc_structures, analyze_elliott_waves, analyze_wyckoff
+
+    smc_result = {}
+    try:
+        smc_result = get_smc_structures.invoke({"ticker": ticker, "lookback": 100})
+    except Exception as exc:
+        logger.warning("SMC tool failed: %s", exc)
+        smc_result = {"error": str(exc)}
+
+    elliott_result = {}
+    try:
+        elliott_result = analyze_elliott_waves.invoke({"ticker": ticker, "zigzag_pct": 0.05})
+    except Exception as exc:
+        logger.warning("Elliott tool failed: %s", exc)
+        elliott_result = {"error": str(exc)}
+
+    wyckoff_result = {}
+    try:
+        wyckoff_result = analyze_wyckoff.invoke({"ticker": ticker, "lookback": 200})
+    except Exception as exc:
+        logger.warning("Wyckoff tool failed: %s", exc)
+        wyckoff_result = {"error": str(exc)}
+
+    # ── 2. Build single prompt with all data ─────────────────────────────
+    prompt = (
+        f"## Dữ liệu tài chính cho {ticker}\n\n"
+        f"### Financial Ratios\n```json\n{_safe_json_dumps(state['raw_financials'])}\n```\n\n"
+        f"### Price & Technical Data\n```json\n{_safe_json_dumps(state['raw_ohlc'])}\n```\n\n"
+        f"### SMC Analysis\n```json\n{_safe_json_dumps(smc_result)}\n```\n\n"
+        f"### Elliott Wave\n```json\n{_safe_json_dumps(elliott_result)}\n```\n\n"
+        f"### Wyckoff Analysis\n```json\n{_safe_json_dumps(wyckoff_result)}\n```\n\n"
+        f"### Tin tức gần đây\n" + "\n".join(f"- {n}" for n in state.get("raw_news", []))
+        + f"\n\n**Mã chứng khoán cần phân tích: {ticker}**\n\n"
+        + "Hãy phân tích tổng hợp và trả về JSON theo format:\n"
+        + "```json\n"
+        + '{\n'
+        + '  "financial_analysis": {"revenue_growth": ..., "profit_growth": ..., "roe": ..., "pe_ratio": ..., "debt_to_equity": ..., "is_healthy": true/false},\n'
+        + '  "technical_signals": {"trend": "UP/DOWN/SIDEWAYS", "rsi": ..., "ma_alignment": "...", "support_zone": "...", "resistance_zone": "..."},\n'
+        + '  "smc_analysis": <tóm tắt SMC>,\n'
+        + '  "elliott_analysis": <tóm tắt Elliott>,\n'
+        + '  "wyckoff_analysis": <tóm tắt Wyckoff>\n'
+        + '}\n```'
+    )
+
+    try:
+        # ── 3. Single LLM invoke (no tools, no ReAct) ───────────────────
+        response = llm.invoke([
+            SystemMessage(content=ANALYST_PROMPT if isinstance(ANALYST_PROMPT, str) else "Bạn là chuyên gia phân tích kỹ thuật chứng khoán Việt Nam."),
+            HumanMessage(content=prompt),
+        ])
+        content = response.content if hasattr(response, "content") else str(response)
+
+        result = _parse_analyst_response(content, ticker)
+
+        # Inject the raw tool results (they won't be lost)
+        if result.get("smc_analysis") is None:
+            result["smc_analysis"] = smc_result
+        if result.get("elliott_analysis") is None:
+            result["elliott_analysis"] = elliott_result
+        if result.get("wyckoff_analysis") is None:
+            result["wyckoff_analysis"] = wyckoff_result
+
+        return result
+
+    except Exception as exc:
+        logger.exception("Analyst signal_mode failed for %s: %s", ticker, exc)
+        # Still return tool results even if LLM fails
+        return _sanitize({
             "financial_analysis": None,
             "technical_signals": None,
-            "smc_analysis": None,
-            "elliott_analysis": None,
-            "wyckoff_analysis": None,
-        }
+            "smc_analysis": smc_result,
+            "elliott_analysis": elliott_result,
+            "wyckoff_analysis": wyckoff_result,
+        })
+
+
+def _parse_analyst_response(content: str, ticker: str) -> dict[str, Any]:
+    """Parse JSON from analyst LLM response and return structured dict."""
+    content = content.strip()
+
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0].strip()
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0].strip()
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        logger.warning("Analyst returned non-JSON for %s: %s", ticker, exc)
+        return _empty_analyst_result()
+
+    fa_data = parsed.get("financial_analysis", {})
+    ta_data = parsed.get("technical_signals", {})
+
+    financial_analysis = FinancialAnalysis(
+        revenue_growth=fa_data.get("revenue_growth", 0),
+        profit_growth=fa_data.get("profit_growth", 0),
+        roe=fa_data.get("roe", 0),
+        pe_ratio=fa_data.get("pe_ratio", 0),
+        debt_to_equity=fa_data.get("debt_to_equity", 0),
+        is_healthy=fa_data.get("is_healthy", False),
+    )
+
+    technical_signals = TechnicalSignals(
+        trend=ta_data.get("trend", "SIDEWAYS"),
+        rsi=ta_data.get("rsi", 50),
+        ma_alignment=ta_data.get("ma_alignment", "N/A"),
+        support_zone=ta_data.get("support_zone", "N/A"),
+        resistance_zone=ta_data.get("resistance_zone", "N/A"),
+    )
+
+    return _sanitize({
+        "financial_analysis": financial_analysis,
+        "technical_signals": technical_signals,
+        "smc_analysis": parsed.get("smc_analysis"),
+        "elliott_analysis": parsed.get("elliott_analysis"),
+        "wyckoff_analysis": parsed.get("wyckoff_analysis"),
+    })
+
+
+def _empty_analyst_result() -> dict[str, Any]:
+    """Default empty result when analysis fails."""
+    return {
+        "financial_analysis": None,
+        "technical_signals": None,
+        "smc_analysis": None,
+        "elliott_analysis": None,
+        "wyckoff_analysis": None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,9 +381,10 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
     """Produce final investment strategy and a formatted Markdown report."""
 
     ticker = state["ticker"]
-    logger.info("🎯 Strategist: building strategy for %s", ticker)
+    mode = state.get("mode", "agent_mode")
+    logger.info("🎯 Strategist: building strategy for %s [%s]", ticker, mode)
 
-    llm = _get_llm()
+    llm = _get_llm(mode)
 
     # Build context from all previous analysis
     fa = state.get("financial_analysis")
@@ -327,7 +441,19 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
         )
 
     previous = state.get("previous_thesis") or "Chưa có luận điểm trước đó."
+    previous_scenarios = state.get("previous_scenarios")
     news_text = "\n".join(f"- {n}" for n in state.get("raw_news", []))
+
+    # Build previous scenarios section
+    scenarios_section = ""
+    if previous_scenarios and isinstance(previous_scenarios, list) and len(previous_scenarios) > 0:
+        scenarios_section = (
+            f"## Kịch bản đầu tư trước đó\n"
+            f"```json\n{_safe_json_dumps(previous_scenarios)}\n```\n\n"
+            f"**Lưu ý**: Hãy đánh giá lại từng kịch bản trên dựa trên dữ liệu mới.\n"
+        )
+    else:
+        scenarios_section = "## Kịch bản đầu tư trước đó\nĐây là phân tích lần đầu — chưa có kịch bản trước đó.\n"
 
     context = (
         f"# Phân tích mã {ticker}\n\n"
@@ -338,7 +464,8 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
         f"## Elliott Wave\n{elliott_summary}\n\n"
         f"## Wyckoff Analysis\n{wyckoff_summary}\n\n"
         f"## Tin tức\n{news_text}\n\n"
-        f"## Luận điểm đầu tư trước đó\n{previous}\n"
+        f"## Luận điểm đầu tư trước đó\n{previous}\n\n"
+        f"{scenarios_section}\n"
     )
 
     messages = [
@@ -356,6 +483,17 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
         # Save thesis to database
         try:
             if strategy:
+                # Serialize scenarios for DB storage
+                scenarios_json = "[]"
+                if strategy.scenarios:
+                    scenarios_json = json.dumps(
+                        [s.model_dump() for s in strategy.scenarios],
+                        default=str, ensure_ascii=False,
+                    )
+                reeval_json = json.dumps(
+                    strategy.reeval_triggers, default=str, ensure_ascii=False,
+                )
+
                 crud.upsert_thesis(
                     symbol=ticker,
                     thesis_content=final_message,
@@ -363,6 +501,9 @@ def strategist_node(state: AgentState) -> dict[str, Any]:
                     stop_loss_price=strategy.stop_loss,
                     entry_zone_min=strategy.entry_price_range[0] if strategy.entry_price_range else 0,
                     entry_zone_max=strategy.entry_price_range[1] if len(strategy.entry_price_range) > 1 else 0,
+                    scenarios_json=scenarios_json,
+                    primary_scenario=strategy.primary_scenario,
+                    reeval_triggers=reeval_json,
                 )
             else:
                 crud.upsert_thesis(symbol=ticker, thesis_content=final_message)
@@ -403,7 +544,6 @@ def _extract_strategy_from_report(
         if smc:
             bullish_obs = smc.get("active_bullish_order_blocks", [])
             if bullish_obs:
-                # Use the nearest bullish OB as entry zone
                 nearest_ob = bullish_obs[-1] if bullish_obs else None
                 if nearest_ob and isinstance(nearest_ob, dict):
                     ob_bottom = nearest_ob.get("bottom", 0)
@@ -438,12 +578,91 @@ def _extract_strategy_from_report(
         elif ta and _g(ta, 'trend') == "DOWN":
             risk = "HIGH"
 
+        # Build 3 scenarios from TA data (best-effort)
+        scenarios = _build_scenarios_from_data(current_price, entry_low, entry_high, target, stop, smc, elliott, ta)
+
+        # Determine primary scenario
+        primary = "BASE"
+        if scenarios:
+            best = max(scenarios, key=lambda s: s.probability)
+            primary = best.label
+
         return InvestmentStrategy(
             thesis_summary=thesis_summary,
+            primary_scenario=primary,
+            scenarios=scenarios,
             entry_price_range=[round(entry_low, 0), round(entry_high, 0)],
             target_price=round(target, 0),
             stop_loss=round(stop, 0),
             risk_level=risk,
+            reeval_triggers=[],
         )
     except Exception:
         return None
+
+
+def _build_scenarios_from_data(
+    current_price: float,
+    entry_low: float,
+    entry_high: float,
+    target: float,
+    stop: float,
+    smc: dict | None,
+    elliott: dict | None,
+    ta: Any,
+) -> list[ScenarioDetail]:
+    """Build 3 ScenarioDetail objects from TA data as fallback.
+
+    The LLM produces the real scenario text in the report; this provides
+    structured data for DB storage so the daily worker can compare numbers.
+    """
+    trend = _g(ta, 'trend', 'SIDEWAYS') if ta else 'SIDEWAYS'
+
+    # Probability heuristics
+    if trend == "UP":
+        bull_p, base_p, bear_p = 50, 30, 20
+    elif trend == "DOWN":
+        bull_p, base_p, bear_p = 20, 30, 50
+    else:
+        bull_p, base_p, bear_p = 30, 40, 30
+
+    bullish = ScenarioDetail(
+        label="BULLISH",
+        probability=bull_p,
+        trigger=f"Giá breakout > {current_price * 1.05:,.0f} với volume tăng",
+        invalidation=f"Giá phá vỡ < {stop:,.0f}",
+        entry_range=[round(entry_low, 0), round(entry_high, 0)],
+        target_price=round(target, 0),
+        stop_loss=round(stop, 0),
+        strategy="BUY_DCA",
+        timeframe="3-6 tháng",
+        status="ACTIVE",
+    )
+
+    base = ScenarioDetail(
+        label="BASE",
+        probability=base_p,
+        trigger=f"Giá dao động trong range {entry_low:,.0f} - {current_price * 1.05:,.0f}",
+        invalidation=f"Giá breakout > {current_price * 1.10:,.0f} hoặc < {stop:,.0f}",
+        entry_range=[round(entry_low, 0), round(entry_high, 0)],
+        target_price=round(current_price * 1.05, 0),
+        stop_loss=round(stop, 0),
+        strategy="HOLD",
+        timeframe="1-3 tháng",
+        status="ACTIVE",
+    )
+
+    bearish = ScenarioDetail(
+        label="BEARISH",
+        probability=bear_p,
+        trigger=f"Giá phá vỡ < {entry_low:,.0f} với volume tăng",
+        invalidation=f"Giá hồi phục > {current_price * 1.05:,.0f}",
+        entry_range=[],
+        target_price=round(stop * 0.90, 0),
+        stop_loss=round(stop, 0),
+        strategy="REDUCE",
+        timeframe="1-3 tháng",
+        status="ACTIVE",
+    )
+
+    return [bullish, base, bearish]

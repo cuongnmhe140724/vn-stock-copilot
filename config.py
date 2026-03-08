@@ -15,6 +15,17 @@ class Settings(BaseSettings):
         description="Claude model identifier",
     )
 
+    # DeepSeek R1 (for backtesting signal_mode)
+    deepseek_api_key: str = Field(default="", description="DeepSeek API key")
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com",
+        description="DeepSeek API base URL",
+    )
+    deepseek_model: str = Field(
+        default="deepseek-reasoner",
+        description="DeepSeek model identifier (R1 = deepseek-reasoner)",
+    )
+
     # Supabase
     supabase_url: str = Field(default="", description="Supabase project URL")
     supabase_key: str = Field(default="", description="Supabase anon/service key")

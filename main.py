@@ -44,6 +44,7 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_tags=[
         {"name": "Analysis", "description": "AI-powered stock analysis (LangGraph pipeline)"},
+        {"name": "Backtest", "description": "Backtesting AI strategies on historical data"},
         {"name": "Watchlist", "description": "Quản lý danh mục theo dõi"},
         {"name": "Snapshots", "description": "Lịch sử biến động hàng ngày"},
         {"name": "System", "description": "Health check & monitoring"},
@@ -77,13 +78,22 @@ async def health():
 
 
 @app.post("/analyze/{ticker}", response_model=AnalysisResponse, tags=["Analysis"], summary="Phân tích mã cổ phiếu")
-async def analyze_ticker(ticker: str, background_tasks: BackgroundTasks):
+async def analyze_ticker(
+    ticker: str,
+    background_tasks: BackgroundTasks,
+    mode: str = Query(
+        default="agent_mode",
+        description="agent_mode (Claude) hoặc signal_mode (DeepSeek R1)",
+        pattern="^(agent_mode|signal_mode)$",
+    ),
+):
     """Run on-demand deep analysis for a ticker (Workflow A).
 
-    Returns the Markdown report and optionally sends it via Telegram.
+    **agent_mode** (default): Full Claude pipeline — highest quality.
+    **signal_mode**: DeepSeek R1 — faster, lower cost.
     """
     ticker = ticker.upper()
-    logger.info("📩 Received analysis request for %s", ticker)
+    logger.info("📩 Received analysis request for %s [%s]", ticker, mode)
 
     try:
         # Ensure stock exists in DB
@@ -92,8 +102,8 @@ async def analyze_ticker(ticker: str, background_tasks: BackgroundTasks):
         except Exception:
             logger.warning("Could not upsert stock to DB (DB might not be configured)")
 
-        # Run the LangGraph pipeline
-        result = run_analysis(ticker)
+        # Run the LangGraph pipeline with selected mode
+        result = run_analysis(ticker, mode=mode)
         report = result.get("final_message", "")
 
         # Send to Telegram in background
@@ -161,4 +171,43 @@ async def get_snapshots(
         return {"status": "ok", "count": len(data), "data": data}
     except Exception as exc:
         logger.exception("Failed to fetch snapshots for %s", symbol)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Backtest ─────────────────────────────────────────────────────────────────
+
+
+class BacktestRequest(BaseModel):
+    start_date: str = Field(default="2024-01-01", description="Start date (YYYY-MM-DD)")
+    end_date: str = Field(default="2024-12-31", description="End date (YYYY-MM-DD)")
+    mode: str = Field(default="signal_mode", description="signal_mode (DeepSeek R1) or agent_mode (Claude)")
+    initial_cash: float = Field(default=100_000_000, description="Initial cash in VND")
+    rebalance_every: int = Field(default=2, description="Re-evaluate every N bars")
+
+
+@app.post("/backtest/{ticker}", tags=["Backtest"], summary="Chạy backtest AI strategy")
+async def run_backtest_api(ticker: str, req: BacktestRequest):
+    """Run a backtest for a ticker using AI-powered signals on historical data.
+
+    **signal_mode**: Uses DeepSeek R1 to analyze SMC/Elliott/Wyckoff signals (low cost).
+    **agent_mode**: Runs full Claude LangGraph pipeline (higher cost).
+    """
+    ticker = ticker.upper()
+    logger.info("📊 Backtest request: %s (%s→%s) mode=%s", ticker, req.start_date, req.end_date, req.mode)
+
+    try:
+        from backtesting.runner import run_backtest
+
+        result = run_backtest(
+            ticker=ticker,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            mode=req.mode,
+            initial_cash=req.initial_cash,
+            rebalance_every=req.rebalance_every,
+        )
+        return {"status": "ok", "data": result.to_dict()}
+
+    except Exception as exc:
+        logger.exception("Backtest failed for %s", ticker)
         raise HTTPException(status_code=500, detail=str(exc))

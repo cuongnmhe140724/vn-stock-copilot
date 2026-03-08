@@ -42,17 +42,23 @@ def _get_graph():
     return _compiled_graph
 
 
-def run_analysis(ticker: str) -> AgentState:
+def run_analysis(ticker: str, mode: str = "agent_mode") -> AgentState:
     """Run the full analysis pipeline for a given ticker.
+
+    Parameters
+    ----------
+    mode : str
+        ``"agent_mode"`` (Claude) or ``"signal_mode"`` (DeepSeek R1).
 
     Returns the final AgentState with all analysis results.
     """
-    logger.info("🚀 Starting analysis pipeline for %s", ticker)
+    logger.info("🚀 Starting analysis pipeline for %s [%s]", ticker, mode)
 
     graph = _get_graph()
 
     initial_state: AgentState = {
         "ticker": ticker.upper(),
+        "mode": mode,
         "current_price": 0.0,
         "raw_financials": {},
         "raw_news": [],
@@ -63,6 +69,7 @@ def run_analysis(ticker: str) -> AgentState:
         "elliott_analysis": None,
         "wyckoff_analysis": None,
         "previous_thesis": None,
+        "previous_scenarios": None,
         "current_strategy": None,
         "daily_delta_note": None,
         "final_message": "",

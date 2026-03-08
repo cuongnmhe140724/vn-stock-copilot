@@ -94,6 +94,9 @@ def upsert_thesis(
     entry_zone_min: float = 0,
     entry_zone_max: float = 0,
     sentiment_score: float = 0.5,
+    scenarios_json: str = "[]",
+    primary_scenario: str = "BASE",
+    reeval_triggers: str = "[]",
 ) -> dict[str, Any]:
     """Insert or update an investment thesis for a symbol."""
     db = get_supabase()
@@ -106,6 +109,9 @@ def upsert_thesis(
         "entry_zone_min": entry_zone_min,
         "entry_zone_max": entry_zone_max,
         "sentiment_score": sentiment_score,
+        "scenarios_json": scenarios_json,
+        "primary_scenario": primary_scenario,
+        "reeval_triggers": reeval_triggers,
         "last_updated": datetime.utcnow().isoformat(),
     }
     result = db.table("investment_theses").insert(data).execute()
@@ -124,6 +130,23 @@ def get_latest_thesis(symbol: str) -> Optional[dict[str, Any]]:
         .execute()
     )
     return result.data[0] if result.data else None
+
+
+def get_active_scenarios(symbol: str) -> list[dict[str, Any]]:
+    """Get active (non-invalidated) scenarios from the latest thesis."""
+    import json as _json
+
+    thesis = get_latest_thesis(symbol)
+    if not thesis:
+        return []
+
+    raw = thesis.get("scenarios_json", "[]")
+    try:
+        scenarios = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        return []
+
+    return [s for s in scenarios if s.get("status") != "INVALIDATED"]
 
 
 # ── Daily Snapshots ──────────────────────────────────────────────────────────
